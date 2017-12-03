@@ -2,17 +2,17 @@
 // Name        : RGD1.cpp
 // Author      : Roger Dickerson
 // Version     :
-// Copyright   : Your copyright notice
+// Copyright   : MIT License Copyright (c) 2017 dickerg-git
 // Description : Hello World in C++, Ansi-style
 //============================================================================
 
 #include <iostream>
 using namespace std;
 
-/* Set up Global Mutex for multi-threading operations. */
 #include <pthread.h>
 #include <stdlib.h>
 
+/* Set up Global Mutex for multi-threading operations. */
 pthread_mutex_t mutex1 = PTHREAD_MUTEX_INITIALIZER;
 long long Task_Counter = 0;
 
@@ -24,7 +24,7 @@ void *loop_function(void* in) {
 	int j       = 0;
     int count_in = *(int*)in;
 
-	for (i = 0; i< 2000000; i++) { // Outer Loop 2M times
+	for (i = 0; i< 1000000; i++) { // Outer Loop 1M times
 
 		for (j = 0; j< (10000*count_in); j++) { // Inner Loop 10K times
 			counter++;
@@ -47,18 +47,20 @@ int rc2, arg2 = 3;
 pthread_t thread1, thread2;
 
 	while (count--) {
-	cout << "!!!Hello Suse Linux using Bear-test!!!" << endl; // prints !!!Hello Suse Linux World!!!
+	cout << "!!!Hello Suse Linux using Bear-test!!!" << endl;
 	}
 
 	/* Create a worker thread to do busy work. */
     rc1 = pthread_create( &thread1, NULL, &loop_function, (void*)&arg1 );
     if (rc1) cout << "Thread1 create failed!!!" << endl;
-    cout << "Starting Thread1..." << endl;
+    else cout << "Starting Thread1..." << endl;
+	// pthread_join(thread1, NULL); //This will pend until thread1 exits!
 
+	/* Create a worker thread to do busy work. */
     rc2 = pthread_create( &thread2, NULL, &loop_function, (void*)&arg2 );
     if (rc2) cout << "Thread2 create failed!!!" << endl;
-    cout << "Starting Thread2..." << endl;
-	// pthread_join(thread1, NULL);
+    else cout << "Starting Thread2..." << endl;
+	// pthread_join(thread2, NULL); //This will pend until thread2 exits!
 
 	/* Start background work in main function. */
 	count = 1;
