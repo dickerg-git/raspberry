@@ -61,6 +61,7 @@
 #include "beaglebone.h"
 #include "gpio_v2.h"
 #include "dmtimer.h"
+#include "interrupt.h"
 
 /******************************************************************************
 **                      INTERNAL MACRO DEFINITIONS
@@ -72,12 +73,15 @@
 /*****************************************************************************
 **                INTERNAL MACRO DEFINITIONS
 *****************************************************************************/
-#define GPIO_INSTANCE_ADDRESS           (SOC_GPIO_0_REGS)
-#define GPIO_INSTANCE_PIN_NUMBER        (13)
+#define GPIO_BANK0_ADDRESS              (SOC_GPIO_0_REGS)
+#define GPIO_LED_PIN_NUMBER             (13)
+#define GPIO_BANK1_ADDRESS              (SOC_GPIO_1_REGS)
+#define GPIO_RESET_PIN_NUMBER           (9)
 
 /*****************************************************************************
 **                INTERNAL FUNCTION PROTOTYPES
 *****************************************************************************/
+static void HW_Setup_GPIO_AM335x(void);
 static void Delay(unsigned int count);
 static void DMTimer2SetUp(void);
 
@@ -89,47 +93,46 @@ static void DMTimer2SetUp(void);
 */
 int main()
 {
-    /* Enabling functional clocks for GPIO1 instance. */
-    GPIO1ModuleClkConfig();
-    /* This function will enable clocks for the DMTimer2 instance */
-    DMTimer2ModuleClkConfig();
+	unsigned int N_Reset = 1;               /* State of the N_Reset pin. */
 
-    /* Setup and start the DMTimer2 to free run. */
+	/* Set up the AM335x GPIO pins as connected to this prototype board. */
+	/* Set up pins for LED and Reset switch.                             */
+    /* ALSO, init the interrupt controller Aintc.                        */
+	HW_Setup_GPIO_AM335x();
+
+    /* Setup and start the DMTimer2 to free run, generate interrupt.     */
     DMTimerDisable(SOC_DMTIMER_2_REGS);
     DMTimer2SetUp();
 
-    /* Selecting GPIO0[13] pin for use. */
-    GPIO0Pin13PinMuxSetup();
-    
-    /* Enabling the GPIO module. */
-    GPIOModuleEnable(GPIO_INSTANCE_ADDRESS);
+    /* Enable IRQ in CPSR */
+    IntMasterIRQEnable();
 
-    /* Resetting the GPIO module. */
-    GPIOModuleReset(GPIO_INSTANCE_ADDRESS);
-
-    /* Setting the GPIO pin as an output pin. */
-    GPIODirModeSet(GPIO_INSTANCE_ADDRESS,
-                   GPIO_INSTANCE_PIN_NUMBER,
-                   GPIO_DIR_OUTPUT);
-
+    /* Enable the DMTimer2 counting function. */
     DMTimerEnable(SOC_DMTIMER_2_REGS);
 
     while(1)
     {
         /* Driving a logic HIGH on the GPIO pin. LED OFF */
-        GPIOPinWrite(GPIO_INSTANCE_ADDRESS,
-                     GPIO_INSTANCE_PIN_NUMBER,
+        GPIOPinWrite(GPIO_BANK0_ADDRESS,
+                     GPIO_LED_PIN_NUMBER,
                      GPIO_PIN_HIGH);
 
         Delay(0x5FFFF);
 
         /* Driving a logic LOW on the GPIO pin. LED ON */
-        GPIOPinWrite(GPIO_INSTANCE_ADDRESS,
-                     GPIO_INSTANCE_PIN_NUMBER,
+        GPIOPinWrite(GPIO_BANK0_ADDRESS,
+                     GPIO_LED_PIN_NUMBER,
                      GPIO_PIN_LOW);
 
         Delay(0x2FFFF);
-    }
+
+        /* Look at the RESET switch state. */
+        N_Reset = /* Equals 0 or 1<<9 */
+        GPIOPinRead(GPIO_BANK1_ADDRESS,
+                    GPIO_RESET_PIN_NUMBER);
+        N_Reset = N_Reset >> GPIO_RESET_PIN_NUMBER;
+
+     }
 
 } 
 
@@ -154,7 +157,44 @@ static void DMTimer2SetUp(void)
 
     /* Configure the DMTimer for Auto-reload and compare mode */
     DMTimerModeConfigure(SOC_DMTIMER_2_REGS, DMTIMER_AUTORLD_NOCMP_ENABLE);
+
+    /* Enable the DMTimer interrupts */
+    DMTimerIntEnable(SOC_DMTIMER_2_REGS, DMTIMER_INT_OVF_EN_FLAG);
+
 }
 
 
+static void HW_Setup_GPIO_AM335x(void)
+{
+	/* Enabling functional clocks for the GPIO instances.         */
+	GPIO0ModuleClkConfig();
+	GPIO1ModuleClkConfig();
+    /* This function will enable clocks for the DMTimer2 instance */
+    DMTimer2ModuleClkConfig();
+
+    /* Selecting GPIO0[13] GPIO1[09] pin for use.       */
+    GPIO0Pin13PinMuxSetup();  /* GPIO0-13 OUTPUT to LED */
+    GPIO1Pin09PinMuxSetup();  /* GPIO1-09 INPUT/PULL-UP */
+
+    /* Enabling the GPIO modules. */
+    GPIOModuleEnable(GPIO_BANK0_ADDRESS);
+    GPIOModuleEnable(GPIO_BANK1_ADDRESS);
+
+    /* Resetting the GPIO modules. */
+    GPIOModuleReset(GPIO_BANK0_ADDRESS);
+    GPIOModuleReset(GPIO_BANK1_ADDRESS);
+
+    /* Setting the GPIO-0 LED pin as an output pin. */
+    GPIODirModeSet(GPIO_BANK0_ADDRESS,
+                   GPIO_LED_PIN_NUMBER,
+                   GPIO_DIR_OUTPUT);
+    /* Setting the GPIO-1 RESET pin as an input pin. */
+    GPIODirModeSet(GPIO_BANK1_ADDRESS,
+                   GPIO_RESET_PIN_NUMBER,
+                   GPIO_DIR_INPUT);
+
+    /* Initialize the ARM interrupt controller system. */
+    IntAINTCInit();
+
+}
 /******************************* End of file *********************************/
