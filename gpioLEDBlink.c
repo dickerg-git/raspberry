@@ -6,6 +6,7 @@
  *          Application Configurations:
  *
  *              Modules Used:
+ *                  GPIO0
  *                  GPIO1
  *
  *              Configuration Parameters:
@@ -15,9 +16,12 @@
  *              1) The GPIO pin GPIO0[13] is used as an output pin.
  *              2) This pin is alternately driven HIGH and LOW. A finite delay
  *                 is given to retain the pin in its current state.
+ *              3) The GPIO pin GPIO1[09] is used as an input pin, to read the switch.
+ *              4) The pin is normally pulled HIGH, the switch connects to GROUND.
+ *              5) The GPIO pin GPIO1[08] is used as an input pin, currently unused.
  *
  *          Running the example:
- *              On running the example, the LED on beaglebone would be seen 
+ *              On running the example, the LED on PROTO CARD would be seen
  *              turning ON and OFF alternatively.
  *
  */
@@ -58,6 +62,7 @@
 
 
 #include "soc_AM335x.h"
+#include "cache.h"
 #include "beaglebone.h"
 #include "gpio_v2.h"
 #include "dmtimer.h"
@@ -81,7 +86,11 @@
 /*****************************************************************************
 **                INTERNAL FUNCTION PROTOTYPES
 *****************************************************************************/
-static void HW_Setup_GPIO_AM335x(void);
+void HW_Setup_GPIO_AM335x(void);
+void HW_GPIO_BlinkLED(int turnOff);
+unsigned int HW_GPIO_Reset_switch(void);
+void BootFromFlash(void);
+
 static void Delay(unsigned int count);
 static void DMTimer2SetUp(void);
 
@@ -93,12 +102,13 @@ static void DMTimer2SetUp(void);
 */
 int main()
 {
-	unsigned int N_Reset = 1;               /* State of the N_Reset pin. */
+    unsigned int N_Reset = 1;               /* State of the N_Reset pin. */
+    unsigned int blinks = 10000;
 
-	/* Set up the AM335x GPIO pins as connected to this prototype board. */
-	/* Set up pins for LED and Reset switch.                             */
+    /* Set up the AM335x GPIO pins as connected to this prototype board. */
+    /* Set up pins for LED and Reset switch.                             */
     /* ALSO, init the interrupt controller Aintc.                        */
-	HW_Setup_GPIO_AM335x();
+    HW_Setup_GPIO_AM335x();
 
     /* Setup and start the DMTimer2 to free run, generate interrupt.     */
     DMTimerDisable(SOC_DMTIMER_2_REGS);
@@ -110,29 +120,23 @@ int main()
     /* Enable the DMTimer2 counting function. */
     DMTimerEnable(SOC_DMTIMER_2_REGS);
 
-    while(1)
+    while(blinks--)
     {
-        /* Driving a logic HIGH on the GPIO pin. LED OFF */
-        GPIOPinWrite(GPIO_BANK0_ADDRESS,
-                     GPIO_LED_PIN_NUMBER,
-                     GPIO_PIN_HIGH);
-
-        Delay(0x5FFFF);
-
-        /* Driving a logic LOW on the GPIO pin. LED ON */
-        GPIOPinWrite(GPIO_BANK0_ADDRESS,
-                     GPIO_LED_PIN_NUMBER,
-                     GPIO_PIN_LOW);
-
-        Delay(0x2FFFF);
+        HW_GPIO_BlinkLED(0);
 
         /* Look at the RESET switch state. */
-        N_Reset = /* Equals 0 or 1<<9 */
-        GPIOPinRead(GPIO_BANK1_ADDRESS,
-                    GPIO_RESET_PIN_NUMBER);
-        N_Reset = N_Reset >> GPIO_RESET_PIN_NUMBER;
+        N_Reset = HW_GPIO_Reset_switch(); /* Equals 0 or 1 */
 
-     }
+        /* Press the switch to stop blinking, perform some tasks. */
+        if( N_Reset == 0 ) break;
+    }
+
+    /* Do some real work now... */
+    if( N_Reset == 0 )
+       BootFromFlash();
+
+    HW_GPIO_BlinkLED(1);
+    while(1);
 
 } 
 
@@ -143,6 +147,83 @@ static void Delay(volatile unsigned int count)
 {
     while(count--);
 }
+
+
+/*
+** A function to blink the LED OFF, then ON.
+** If requested, exit with the LED off again.
+** Wired to the GPIO0-13 pin.
+*/
+void HW_GPIO_BlinkLED(int turnOff)
+{
+    unsigned int delay;
+
+    /* Driving a logic HIGH on the GPIO pin. LED OFF */
+    GPIOPinWrite(GPIO_BANK0_ADDRESS,
+                 GPIO_LED_PIN_NUMBER,
+                 GPIO_PIN_HIGH);
+
+    delay = 0x5FFFF;
+    while( delay--);
+
+    /* Driving a logic LOW on the GPIO pin. LED ON */
+    GPIOPinWrite(GPIO_BANK0_ADDRESS,
+                 GPIO_LED_PIN_NUMBER,
+                 GPIO_PIN_LOW);
+
+    delay = 0x2FFFF;
+    while( delay--);
+
+    if (turnOff) {
+        /* Exit the routine with the LED OFF. */
+        GPIOPinWrite(GPIO_BANK0_ADDRESS,
+                     GPIO_LED_PIN_NUMBER,
+                     GPIO_PIN_HIGH);
+    }
+}
+
+
+/*
+** A function to return the state of the PROTO Reset button.
+** Reads the pin wired to GPIO1-09, returns 0 or 1.
+*/
+unsigned int HW_GPIO_Reset_switch(void)
+{
+
+    return(
+	   GPIOPinRead(GPIO_BANK1_ADDRESS,
+                   GPIO_RESET_PIN_NUMBER)
+       >> GPIO_RESET_PIN_NUMBER
+    );
+
+}
+
+/* Attempt to boot the PROTO card from it's Flash */
+void BootFromFlash(void)
+{
+	unsigned long volatile * from_ptr = (unsigned long volatile *) 0x08000000;
+	unsigned long volatile * to_ptr   = (unsigned long volatile *) 0x80000000;
+
+	/* Read the Flash code header length and address. */
+    unsigned long code_length  = *((long*)from_ptr++);
+    unsigned long code_address = *((long*)from_ptr++);
+
+    /* Verify the code address in the image points to DDR space. */
+    if (code_address != 0x80000000) return;
+    if (code_length > 10000000) return;
+
+    while( code_length > 0 ) {
+    	*to_ptr = *from_ptr;
+        // if(*to_ptr != *from_ptr ) while(1); /* Data Miscompare, HALT! */
+
+        to_ptr++;
+		from_ptr++;
+
+		code_length -= 4;
+    }
+
+}
+
 
 /*
 ** Setup the timer for one-shot and compare mode.
@@ -164,11 +245,12 @@ static void DMTimer2SetUp(void)
 }
 
 
-static void HW_Setup_GPIO_AM335x(void)
+void HW_Setup_GPIO_AM335x(void)
 {
-	/* Enabling functional clocks for the GPIO instances.         */
-	GPIO0ModuleClkConfig();
-	GPIO1ModuleClkConfig();
+    /* Enabling functional clocks for the GPIO instances.         */
+    GPIO0ModuleClkConfig();
+    GPIO1ModuleClkConfig();
+
     /* This function will enable clocks for the DMTimer2 instance */
     DMTimer2ModuleClkConfig();
 
@@ -191,7 +273,7 @@ static void HW_Setup_GPIO_AM335x(void)
     /* Setting the GPIO-1 RESET pin as an input pin. */
     GPIODirModeSet(GPIO_BANK1_ADDRESS,
                    GPIO_RESET_PIN_NUMBER,
-                   GPIO_DIR_INPUT);
+                    GPIO_DIR_INPUT);
 
     /* Initialize the ARM interrupt controller system. */
     IntAINTCInit();
