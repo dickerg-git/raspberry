@@ -98,8 +98,6 @@ int main()
     unsigned int N_Reset = 1;               /* State of the N_Reset pin. */
     unsigned int blinks = 10000;
 
-    CacheEnable(CACHE_ALL);
-
     /* Set up the AM335x GPIO pins as connected to this prototype board. */
     /* Set up pins for LED and Reset switch.                             */
     /* ALSO, init the interrupt controller Aintc.                        */
@@ -111,14 +109,17 @@ int main()
     DMTimerDisable(SOC_DMTIMER_2_REGS);
     DMTimer2SetUp();
 
+    /* Enable the MMU, if required. MMU Setup in the startup function. */
+    /* Enable the I and D caches, needs Supervisor permissions.        */
+    CacheEnable(CACHE_ALL);
+
     /* Enable IRQ in CPSR */
     IntMasterIRQEnable();
 
     /* Enable the DMTimer2 counting function. */
     DMTimerEnable(SOC_DMTIMER_2_REGS);
 
-    while(blinks--)
-    {
+    while(blinks--)    {
         HW_GPIO_BlinkLED(0);
 
         /* Look at the RESET switch state. */
@@ -214,7 +215,7 @@ unsigned int HW_GPIO_Reset_switch(void)
 #define GPIO_RESET_PIN_NUMBER           (9)
 
     return(
-	   GPIOPinRead(GPIO_BANK1_ADDRESS,
+       GPIOPinRead(GPIO_BANK1_ADDRESS,
                    GPIO_RESET_PIN_NUMBER)
        >> GPIO_RESET_PIN_NUMBER
     );
@@ -228,12 +229,12 @@ unsigned int HW_GPIO_Reset_switch(void)
 */
 unsigned int HW_GPIO_Debug_switch(void)
 {
-#define GPIO_RESET_PIN_NUMBER           (8)
+#define GPIO_DEBUG_PIN_NUMBER           (8)
 
     return(
-	   GPIOPinRead(GPIO_BANK1_ADDRESS,
-                   GPIO_RESET_PIN_NUMBER)
-       >> GPIO_RESET_PIN_NUMBER
+       GPIOPinRead(GPIO_BANK1_ADDRESS,
+                   GPIO_DEBUG_PIN_NUMBER)
+       >> GPIO_DEBUG_PIN_NUMBER
     );
 
 }
@@ -242,10 +243,10 @@ unsigned int HW_GPIO_Debug_switch(void)
 /* Attempt to boot the PROTO card from it's Flash */
 void BootFromFlash(void)
 {
-	unsigned long volatile * from_ptr = (unsigned long volatile *) 0x08000000;
-	unsigned long volatile * to_ptr   = (unsigned long volatile *) 0x80000000;
+    unsigned long volatile * from_ptr = (unsigned long volatile *) 0x08000000;
+    unsigned long volatile * to_ptr   = (unsigned long volatile *) 0x80000000;
 
-	/* Read the Flash code header length and address. */
+    /* Read the Flash code header length and address. */
     unsigned long code_length  = *((long*)from_ptr++);
     unsigned long code_address = *((long*)from_ptr++);
     unsigned long code_bytes = 0;
@@ -263,9 +264,9 @@ void BootFromFlash(void)
         if(*to_ptr != *from_ptr ) while(1); /* Data Miscompare, HALT! */
 
         to_ptr++;
-		from_ptr++;
+        from_ptr++;
 
-		code_length -= 4;
+        code_length -= 4;
         code_bytes  += 4;
     }
 
@@ -298,7 +299,7 @@ void HW_Setup_GPIO_AM335x(void)
     /* Setting the GPIO-1 RESET pin as an input pin. */
     GPIODirModeSet(GPIO_BANK1_ADDRESS,
                    GPIO_RESET_PIN_NUMBER,
-                    GPIO_DIR_INPUT);
+                   GPIO_DIR_INPUT);
 
     /* Initialize the ARM interrupt controller system. */
     IntAINTCInit();
