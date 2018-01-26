@@ -78,7 +78,7 @@
 /*****************************************************************************
 **                INTERNAL FUNCTION PROTOTYPES
 *****************************************************************************/
-void HW_Setup_GPIO_AM335x(void);
+void HW_Setup_GPIO_Beagle(void);
 void HW_GPIO_BlinkLED(int turnOff);
 unsigned int HW_GPIO_Reset_switch(void);
 unsigned int HW_GPIO_Debug_switch(void);
@@ -86,38 +86,52 @@ void BootFromFlash(void);
 
 static void Delay(unsigned int count);
 static void DMTimer2SetUp(void);
+       void CopyVectorTable(void);
 
 /*****************************************************************************
-**                INTERNAL FUNCTION DEFINITIONS
+**                GLOBAL VARIABLE ALLOCATIONS
+*****************************************************************************/
+       unsigned int flagIsr = 0;
+
+/*****************************************************************************
+**                MAIN FUNCTION DEFINITIONS
 *****************************************************************************/
 /*
 ** The main function. Application starts here.
+**
+** Initialize the Beagle GPIO, DMTimer2, Interrupt controller & vector table.
+** Clear and enable both I and D caches.
+** Register the DMTimer2 interrupt service routine, enable Interrupts at CPSR.
+**
+** The blinking USR2 LED is interrupted by the the service routine.
+** Exit if the GPIO detects input or interrupt count exceeded.
 */
 int main()
 {
     unsigned int N_Reset = 1;               /* State of the N_Reset pin. */
     unsigned int blinks = 10000;
 
-    /* Set up the AM335x GPIO pins as connected to this prototype board. */
-    /* Set up pins for LED and Reset switch.                             */
+    /* Set up the AM335x GPIO pins as connected to this Beagle board.    */
+    /* Set up pins for USR2 LED and Reset switch.                        */
     /* ALSO, init the interrupt controller Aintc.                        */
-    HW_Setup_GPIO_AM335x();
+    HW_Setup_GPIO_Beagle();
 
     /* Setup and start the DMTimer2 to free run, generate interrupt.     */
-    /* This function will enable clocks for the DMTimer2 instance */
-    DMTimer2ModuleClkConfig();
+    /* This function will enable clocks for the DMTimer2 instance.       */
     DMTimerDisable(SOC_DMTIMER_2_REGS);
     DMTimer2SetUp();
 
-    /* Enable the MMU, if required. MMU Setup in the startup function. */
-    /* Enable the I and D caches, needs Supervisor permissions.        */
+    /* Enable the DMTimer2 counting function.                            */
+    DMTimerEnable(SOC_DMTIMER_2_REGS);
+
+    /* Enable the MMU, if required. MMU Setup in the startup function.   */
+    /* Enable the I and D caches, needs Supervisor permissions.          */
     CacheEnable(CACHE_ALL);
 
+    /* There is a HOT interrupt for counter 2!!! */
     /* Enable IRQ in CPSR */
     IntMasterIRQEnable();
 
-    /* Enable the DMTimer2 counting function. */
-    DMTimerEnable(SOC_DMTIMER_2_REGS);
 
     while(blinks--)    {
         HW_GPIO_BlinkLED(0);
@@ -127,6 +141,8 @@ int main()
 
         /* Press the switch to stop blinking, perform some tasks. */
         if( N_Reset == 0 ) break;
+
+        if( flagIsr > 100 ) break;
     }
 
     /* Do some real work now... */
@@ -148,11 +164,11 @@ static void Delay(volatile unsigned int count)
 
 
 /*
-** Setup the timer for one-shot and compare mode.
+** Setup the timer for Reload mode, Enable interrupt at TC.
 */
 static void DMTimer2SetUp(void)
 {
-    /* Load the load register with the reload count value */
+	/* Load the load register with the reload count value */
     DMTimerReloadSet(SOC_DMTIMER_2_REGS, TIMER_RLD_COUNT);
 
     /* Load the counter with the initial count value */
@@ -160,6 +176,9 @@ static void DMTimer2SetUp(void)
 
     /* Configure the DMTimer for Auto-reload and compare mode */
     DMTimerModeConfigure(SOC_DMTIMER_2_REGS, DMTIMER_AUTORLD_NOCMP_ENABLE);
+
+    /* Clear the status of the interrupt flags */
+    DMTimerIntStatusClear(SOC_DMTIMER_2_REGS, DMTIMER_INT_OVF_IT_FLAG);
 
     /* Enable the DMTimer interrupts */
     DMTimerIntEnable(SOC_DMTIMER_2_REGS, DMTIMER_INT_OVF_EN_FLAG);
@@ -173,35 +192,35 @@ static void DMTimer2SetUp(void)
 /*
 ** A function to blink the LED OFF, then ON.
 ** If requested, exit with the LED off again.
-** Wired to the GPIO0-13 pin.
+** Wired to the USER2 LED on GPIO1-23 pin.
 */
 void HW_GPIO_BlinkLED(int turnOff)
 {
-#define GPIO_LED_PIN_NUMBER             (13)
+#define GPIO_LED_PIN_NUMBER             (23)
 
 	unsigned int delay;
 
-	/* Driving a logic HIGH on the GPIO pin. LED OFF */
-	GPIOPinWrite(GPIO_BANK0_ADDRESS,
-                 GPIO_LED_PIN_NUMBER,
-                 GPIO_PIN_HIGH);
-
-	delay = 0x5FFFF;
-	while( delay--);
-
-	/* Driving a logic LOW on the GPIO pin. LED ON */
-	GPIOPinWrite(GPIO_BANK0_ADDRESS,
+	/* Driving a logic HIGH on the GPIO pin. LED OFF  */
+	GPIOPinWrite(GPIO_BANK1_ADDRESS,
                  GPIO_LED_PIN_NUMBER,
                  GPIO_PIN_LOW);
 
+	delay = 0x5FFFF;
+	Delay(delay);
+
+	/* Driving a logic LOW on the GPIO pin. LED ON */
+	GPIOPinWrite(GPIO_BANK1_ADDRESS,
+                 GPIO_LED_PIN_NUMBER,
+                 GPIO_PIN_HIGH);
+
     delay = 0x2FFFF;
-    while( delay--);
+	Delay(delay);
 
     if (turnOff) {
         /* Exit the routine with the LED OFF. */
-        GPIOPinWrite(GPIO_BANK0_ADDRESS,
+        GPIOPinWrite(GPIO_BANK1_ADDRESS,
                      GPIO_LED_PIN_NUMBER,
-                     GPIO_PIN_HIGH);
+                     GPIO_PIN_LOW);
     }
 }
 
@@ -273,16 +292,38 @@ void BootFromFlash(void)
 }
 
 
-void HW_Setup_GPIO_AM335x(void)
+/*
+** DMTimer interrupt service routine.
+** This function gets called on every Timer2 terminal count event.
+**
+*/
+void DMTimerIsr(void)
+{
+    /* Disable the DMTimer interrupts */
+    DMTimerIntDisable(SOC_DMTIMER_2_REGS, DMTIMER_INT_OVF_EN_FLAG);
+
+    /* Clear the status of the interrupt flags */
+    DMTimerIntStatusClear(SOC_DMTIMER_2_REGS, DMTIMER_INT_OVF_IT_FLAG);
+
+    flagIsr += 1;
+
+    /* Enable the DMTimer interrupts */
+    DMTimerIntEnable(SOC_DMTIMER_2_REGS, DMTIMER_INT_OVF_EN_FLAG);
+}
+
+
+void HW_Setup_GPIO_Beagle(void)
 {
     /* Enabling functional clocks for the GPIO instances.         */
     GPIO0ModuleClkConfig();
     GPIO1ModuleClkConfig();
+    DMTimer2ModuleClkConfig();
 
-    /* Selecting GPIO0[13] GPIO1[09] pin for use.       */
+    /* Selecting GPIO1[23] pin for use.                 */
     /* These routines need Supervisor mode privileges.  */
-    GPIO0Pin13PinMuxSetup();  /* GPIO0-13 OUTPUT to LED */
-    GPIO1Pin09PinMuxSetup();  /* GPIO1-09 INPUT/PULL-UP */
+    GPIO1Pin23PinMuxSetup();  /* BeagleBone USER LED    */
+    //GPIO0Pin13PinMuxSetup();  /* GPIO0-13 OUTPUT to LED */
+    //GPIO1Pin09PinMuxSetup();  /* GPIO1-09 INPUT/PULL-UP */
 
     /* Enabling the GPIO modules. */
     GPIOModuleEnable(GPIO_BANK0_ADDRESS);
@@ -292,6 +333,10 @@ void HW_Setup_GPIO_AM335x(void)
     GPIOModuleReset(GPIO_BANK0_ADDRESS);
     GPIOModuleReset(GPIO_BANK1_ADDRESS);
 
+    /* Setting the GPIO-1 LED pin as an output pin. */
+    GPIODirModeSet(GPIO_BANK1_ADDRESS,
+                   GPIO_LED_PIN_NUMBER,
+                   GPIO_DIR_OUTPUT);
     /* Setting the GPIO-0 LED pin as an output pin. */
     GPIODirModeSet(GPIO_BANK0_ADDRESS,
                    GPIO_LED_PIN_NUMBER,
@@ -301,8 +346,20 @@ void HW_Setup_GPIO_AM335x(void)
                    GPIO_RESET_PIN_NUMBER,
                    GPIO_DIR_INPUT);
 
+    /* Copy the vector table into OCM at 0x4030FC00              */
+    /* All IRQ's will call IRQHandler, from exceptionhandler.asm */
+    CopyVectorTable();
+
     /* Initialize the ARM interrupt controller system. */
     IntAINTCInit();
 
+    /* Registering DMTimerIsr */
+    IntRegister(SYS_INT_TINT2, DMTimerIsr);
+
+    /* Set the priority */
+    IntPrioritySet(SYS_INT_TINT2, 0, AINTC_HOSTINT_ROUTE_IRQ);
+
+    /* Enable the system interrupt */
+    IntSystemEnable(SYS_INT_TINT2);
 }
 /******************************* End of file *********************************/
