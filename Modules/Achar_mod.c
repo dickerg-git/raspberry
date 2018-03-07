@@ -2,10 +2,12 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/cdev.h>
 #include <linux/fs.h>
+#include <linux/cdev.h>
 #include <linux/ioport.h>
 #include <asm/io.h>
+#include <asm/uaccess.h>
+
 
 /* Begin to build a generic kermel module for the Raspberry Pi3. */
 /* Kenel source at: /home/rogerd/cdev/kernel/raspberry3/linux    */
@@ -30,6 +32,8 @@ static struct class *achar_class;
 #define SOC_REG_BASE 0x3F003000  /* Broadcom System Timer Registers */
 #define SOC_REG_LEN  0x00000020  /* Broadcom System Timer Registers */
 
+#define TRUE  1
+#define FALSE 0
 
 
 /* Structure to represent the character driver instance. */
@@ -47,7 +51,7 @@ struct achar_data_struct
 
         void *private_data;
         bool is_open;
-        struct mutex sem;
+        struct semaphore sem;           /* Requires sema_init() before using! */
 
 };
 
@@ -56,21 +60,84 @@ struct achar_data_struct * achar_data = NULL;
 
 volatile void *Test_reg = (int*)SOC_REG_BASE;  /* Broadcom System Timer Register */
 
+#if 0
+#include <linux/fs.h>
+#else
+static int driver_open( struct inode *inode, struct file *filep );
+static int driver_release( struct inode *inode, struct file *filep );
+static ssize_t driver_read( struct file *filep, char __user *ReadData, size_t readCount, loff_t *offset );
+static ssize_t driver_write( struct file *filep, const char __user *WriteData, size_t writeCount, loff_t *offset );
+#endif
 static const struct file_operations achar_fops = {
-        .owner = THIS_MODULE,
-        // .write = hwicap_write,
-        // .read = hwicap_read,
-        // .open = hwicap_open,
-        // .release = hwicap_release,
+        .owner   = THIS_MODULE,
+        .write   = driver_write,
+        .read    = driver_read,
+        .open    = driver_open,
+        .release = driver_release,
 };
 
 /* Boilerplate Init, Exit functions.
  * Does not do platform probing in this module.
  * Probing would call request_mem_region() to setup memory map.
  */
+
+static int driver_open( struct inode *inode, struct file *filep )
+{
+   int retval = 0;
+
+   //printk( KERN_INFO "Using semaphore "MY_MODULE_NAME" result: %08X", (int)&achar_data );
+
+   retval = down_interruptible( &achar_data->sem );
+   if( retval != 0 ) {
+      printk( KERN_INFO "Couldn't open driver "MY_MODULE_NAME" result: %08X", retval );
+      return retval;
+   }
+   achar_data->is_open = TRUE;
+
+   printk( KERN_INFO "Opened "MY_MODULE_NAME" result: %08X", retval );
+
+   return retval;
+}
+
+static int driver_release( struct inode *inode, struct file *filep )
+{
+   int retval = 0;
+
+   up( &achar_data->sem );
+   achar_data->is_open = FALSE;
+
+   printk( KERN_INFO "Closed "MY_MODULE_NAME" result: %08X", retval );
+
+   return retval;
+}
+
+static ssize_t driver_read( struct file *filep, char __user *ReadData, size_t readCount, loff_t *offset )
+{
+   int retval = 0;
+   unsigned int to_user;
+
+   to_user = ioread32(Test_reg+4);
+   put_user(to_user, (int*)ReadData );
+   printk( KERN_INFO "Reading "MY_MODULE_NAME" result: %08X", to_user );
+   to_user = ioread32(Test_reg+8);
+   put_user(to_user, (int*)(ReadData+4) );
+   to_user = ioread32(Test_reg);
+   put_user(to_user, (int*)(ReadData+8) );
+
+   return retval;
+}
+
+static ssize_t driver_write( struct file *filep, const char __user *WriteData, size_t writeCount, loff_t *offset )
+{
+
+   return 0;
+}
+
+
+
 static int __init Achar_init( void )
 {
-// volatile int *Test_reg = (int*)0x7E003000; /* Broadcom System Timer Register */
+// volatile int *Test_reg = (int*)0x3F003000; /* Broadcom System Timer Register */
          int  test = 0;
 
         dev_t devt;
@@ -86,12 +153,15 @@ static int __init Achar_init( void )
                 retval = -ENOMEM;
                 return retval; /* kfree before every return of this function!!! */
         }
+   // printk( KERN_INFO "Allocated "MY_MODULE_NAME" result: %08X", (int)&achar_data );
 
    // class = class_create(THIS_MODULE, "config");
         achar_class = class_create(THIS_MODULE, "achar_config");
 
    // mutex_init();
         mutex_init(&init_sem);
+        /* Allow only one open driver instance at a time. */
+        sema_init( &achar_data->sem, 1 );
 
    // devt = MKDEV(MAJOR, MINOR);
    // retval = register_chrdev_region(devt, DEVICES, DRIVER_NAME);
@@ -165,9 +235,9 @@ static int __init Achar_init( void )
 
         iowrite32(0x123456FF, Test_reg+0x00);
         test = ioread32(Test_reg+0x10);
-        printk( KERN_INFO "IOremap "MY_MODULE_NAME" TimerCS %08X", (int)test );
+        // printk( KERN_INFO "IOremap "MY_MODULE_NAME" TimerCP %08X", (int)test );
         test = ioread32(Test_reg+0x14);
-        printk( KERN_INFO "IOremap "MY_MODULE_NAME" TimerCS %08X", (int)test );
+        // printk( KERN_INFO "IOremap "MY_MODULE_NAME" TimerCP %08X", (int)test );
 
    return( 0 );
 
@@ -178,7 +248,7 @@ static void __exit Achar_exit( void )
 {
         dev_t devt;
 
-        printk( KERN_INFO "Releasing "MY_MODULE_NAME" Module. %08X", ACHAR_MAJOR );
+        printk( KERN_INFO "Releasing "MY_MODULE_NAME" Module. %08d", ACHAR_MAJOR );
 
    //   class_destroy(class);
         class_destroy(achar_class);
