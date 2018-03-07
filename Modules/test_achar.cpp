@@ -4,6 +4,15 @@
 #include <unistd.h>
 
 
+// sudo mknod /dev/achar c 1000 0; sudo chmod 777 /dev/achar
+// sudo insmod Achar_mod.ko
+//
+//      arm-linux-gnueabihf-g++ -o test_achar test_achar.cpp
+//      ./test_achar
+//
+// Timer HI_LO: 00000015_40362C8A
+// Timer CS: 00000002
+// 
 
 int main()
 {
